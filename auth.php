@@ -1,8 +1,8 @@
 <?php
 // must be run within Dokuwiki
 if(!defined('DOKU_INC')) die();
-error_reporting (E_ALL | E_STRICT);  
-ini_set ('display_errors', 'On');
+//error_reporting (E_ALL | E_STRICT);  
+//ini_set ('display_errors', 'On');
 /**
  * authenticat against owncloud instance
  *
