@@ -1,0 +1,7 @@
+base   authmysql
+author Martin Schulte
+email  lebowski[at]corvus[dot]uberspace[dot]de
+date   2013-04-27
+name   owncloud auth plugin
+desc   Provides authentication against a owncloud instance
+url    http://www.dokuwiki.org/plugin:authowncloud
