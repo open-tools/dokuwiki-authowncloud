@@ -1,4 +1,4 @@
-base   authmysql
+base   authowncloud
 author Martin Schulte
 email  lebowski[at]corvus[dot]uberspace[dot]de
 date   2013-04-27
