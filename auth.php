@@ -260,7 +260,6 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin {
     public function logOff(){
 		/* Doesn't work, i don't no why. If I run this 3 lines in an 
 		 * external script, it works. Within DokuWiki not */
-		 echo "<h1>asdasdasd</h1>";
 		session_name(OC_Util::getInstanceId());
 		session_start();
 		OC_User::logout();
