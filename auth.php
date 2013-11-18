@@ -13,7 +13,12 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin {
    
 	public function __construct() {
 		parent::__construct();
+        $savedSession = session_name();
+        session_write_close();
 		require_once($this->getConf('pathtoowncloud').'/lib/base.php');
+        session_write_close();
+        session_name($savedSession);
+        session_start();
 		// Check if ownCloud is installed or in maintenance (update) mode
 		if (!OC_Config::getValue('installed', false)) {
 			global $conf;
@@ -260,9 +265,14 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin {
     public function logOff(){
 		/* Doesn't work, i don't no why. If I run this 3 lines in an 
 		 * external script, it works. Within DokuWiki not */
+        $savedSession = session_name();
+        session_write_close();
 		session_name(OC_Util::getInstanceId());
 		session_start();
 		OC_User::logout();
+        session_write_close();
+        session_name($savedSession);
+        session_start();
 	}
 	
 	
