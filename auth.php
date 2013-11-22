@@ -14,21 +14,22 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin {
 	public function __construct() {
 		parent::__construct();
 
-        $savedSession = session_name();
-        session_write_close();
         // one could argue about error_reportint() .... ;) However, we
         // simply save and restore the settings active in
         // owncloud. Otherwise the owncloud.log will be bloated with
         // all kind of DW warnings
+        register_shutdown_function(create_function('', 'error_reporting(0);'));
+        
         $savedReporting = error_reporting();
 
+        $savedSession = session_name();
+        session_write_close();
 		require_once($this->getConf('pathtoowncloud').'/lib/base.php');
-
-        error_reporting($savedReporting);
-        error_reporting(E_ALL & ~E_NOTICE & ~E_DEPRECATED & ~E_STRICT);
         session_write_close();
         session_name($savedSession);
         session_start();
+
+        error_reporting($savedReporting);
 
 		// Check if ownCloud is installed or in maintenance (update) mode
 		if (!OC_Config::getValue('installed', false)) {
