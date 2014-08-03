@@ -19,17 +19,28 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin {
         // owncloud. Otherwise the owncloud.log will be bloated with
         // all kind of DW warnings
         register_shutdown_function(create_function('', 'error_reporting(0);'));
-        
         $savedReporting = error_reporting();
 
+        // Yet another difficulty: just include base.php from Owncloud
+        // has all sorts of side effects; sets sessions cookies and so
+        // on. In the standard configuration we only have to disable
+        // the session cookies, otherwise it will destroy the
+        // browser's cookie storage. Still base.php _WILL_ change a
+        // lot of things. We also save and restore the session life-time
+
         $savedSession = session_name();
+        $savedUseCookies = ini_get('session.use_cookies');
+        $savedLifeTime = ini_get('gc_maxlifetime');
         $savedCookieParams = session_get_cookie_params();
         session_write_close();
 
+        ini_set('session.use_cookies', 0);
         require_once($this->getConf('pathtoowncloud').'/lib/base.php');
         session_write_close();
 
         session_name($savedSession);
+        ini_set('session.use_cookies', $savedUseCookies);
+        ini_set('gc_maxlifeTime', $savedLifeTime);
         session_set_cookie_params($savedCookieParams['lifetime'],
                                   $savedCookieParams['path'],
                                   $savedCookieParams['domain'],
