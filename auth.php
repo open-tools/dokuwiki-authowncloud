@@ -23,10 +23,18 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin {
         $savedReporting = error_reporting();
 
         $savedSession = session_name();
+        $savedCookieParams = session_get_cookie_params();
         session_write_close();
-		require_once($this->getConf('pathtoowncloud').'/lib/base.php');
+
+        require_once($this->getConf('pathtoowncloud').'/lib/base.php');
         session_write_close();
+
         session_name($savedSession);
+        session_set_cookie_params($savedCookieParams['lifetime'],
+                                  $savedCookieParams['path'],
+                                  $savedCookieParams['domain'],
+                                  $savedCookieParams['secure'],
+                                  $savedCookieParams['httponly']);
         session_start();
 
         error_reporting($savedReporting);
