@@ -36,8 +36,8 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin {
 
         ini_set('session.use_cookies', 0);
         require_once($this->getConf('pathtoowncloud').'/lib/base.php');
-        session_write_close();
-        session_destroy();
+	//       	session_destroy(); Don't
+	session_write_close();
 
         session_name($savedSession);
         ini_set('session.use_cookies', $savedUseCookies);
