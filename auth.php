@@ -29,17 +29,29 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin {
         // lot of things. We also save and restore the session life-time
 
         $savedSession = session_name();
+        $savedSessionId = session_id();
         $savedUseCookies = ini_get('session.use_cookies');
         $savedLifeTime = ini_get('gc_maxlifetime');
         $savedCookieParams = session_get_cookie_params();
         session_write_close();
 
         ini_set('session.use_cookies', 0);
+        session_id($savedSessionId."DUMMY");
         require_once($this->getConf('pathtoowncloud').'/lib/base.php');
-	//       	session_destroy(); Don't
-	session_write_close();
+        restore_error_handler();
+        
+        if (!session_id()) {
+            session_start();
+        }
+        $_SESSION = array();
+        if (ini_get("session.use_cookies")) {
+            $params = session_get_cookie_params();
+            setcookie(session_name(), '', time() - 42000, $params["path"],
+                      $params["domain"], $params["secure"], $params["httponly"]
+            );
+        }
+        session_destroy();
 
-        session_name($savedSession);
         ini_set('session.use_cookies', $savedUseCookies);
         ini_set('gc_maxlifeTime', $savedLifeTime);
         session_set_cookie_params($savedCookieParams['lifetime'],
@@ -47,6 +59,8 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin {
                                   $savedCookieParams['domain'],
                                   $savedCookieParams['secure'],
                                   $savedCookieParams['httponly']);
+        session_name($savedSession);
+        session_id($savedSessionId);
         session_start();
 
         error_reporting($savedReporting);
