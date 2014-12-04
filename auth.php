@@ -209,7 +209,7 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin {
      * @param array $filter
      * @return int
      */
-    private function getUsers($filter = array(), $start = 0, $limit = -1) {
+    private function getUsers($filter = array(), $start = 0, $limit = -1, $count = false) {
 		$wheres = '';
 		$joins = '';
 		$selectMail = '';
@@ -249,7 +249,11 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin {
 			}
 			if(!empty($where)) $wheres = ' WHERE '.implode(' AND ', $where);
 		}
-		$sql = "SELECT DISTINCT *PREFIX*users.uid AS user, *PREFIX*users.displayname AS name $selectMail $selectGroup FROM `*PREFIX*users`";
+                if ($count) {
+                    $sql = "SELECT COUNT(DISTINCT *PREFIX*users.uid) as 'count' FROM `*PREFIX*users`";
+                } else {
+                    $sql = "SELECT DISTINCT *PREFIX*users.uid AS user, *PREFIX*users.displayname AS name $selectMail $selectGroup FROM `*PREFIX*users`";
+                }
 		$sql .= $joins.' '.$wheres;
 		if($limit > 0) $sql .= ' LIMIT '.$start.','.$limit.' ';
 		$db = OC_DB::prepare($sql);
@@ -267,11 +271,11 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin {
      * @return int
      */
     public function getUserCount($filter = array()){
-		return $this->getUsers($filter)->numRows();
-	}
+        $row = $this->getUsers($filter, 0, -1, true)->fetchRow();
+        return $row['count'];
+    }	
 	
-	
-	/**
+    /**
      * Bulk retrieval of user data
      *
      *
