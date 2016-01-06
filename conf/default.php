@@ -1,4 +1,4 @@
 <?php
-$conf['pathtoowncloud']      = '/var/www/cloud';
+$conf['ownclouduri']         = 'https://www.example.com/owncloud';
 $conf['disableoclogout']     = 0;
 

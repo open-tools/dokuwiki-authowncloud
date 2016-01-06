@@ -1,92 +1,241 @@
 <?php
 // must be run within Dokuwiki
 if(!defined('DOKU_INC')) die();
-//error_reporting (E_ALL | E_STRICT);  
+//error_reporting (E_ALL | E_STRICT);
 //ini_set ('display_errors', 'On');
 /**
  * authenticat against owncloud instance
  *
  * @license   GPL 2 (http://www.gnu.org/licenses/gpl.html)
  * @author    Martin Schulte <lebowski[at]corvus[dot]uberspace[dot]de>
+ * @author    Claus-Justus Heine <himself@claus-justus-heine.de>
+ *
+ * The current implementation uses the OC provisioning API. Note that
+ * DokuWiki stores the user credentials in its cookies in a way that
+ * they can be decrypted. This is questionable. OTOH, quite practical
+ * here: just pass the user creds in each REST request. Other scheme
+ * would be to remember the auth cookies.
+ *
  */
-class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin {
-   
-	public function __construct() {
-		parent::__construct();
+class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin
+{
+    protected $ownCloudUri; ///< from config space
+    protected $authCookies; ///< from session
+    protected $user; ///< cached user
+    protected $password; ///< cached password
 
-        // one could argue about error_reportint() .... ;) However, we
-        // simply save and restore the settings active in
-        // owncloud. Otherwise the owncloud.log will be bloated with
-        // all kind of DW warnings
-        register_shutdown_function(create_function('', 'error_reporting(0);'));
-        $savedReporting = error_reporting();
+    public function __construct() {
+        parent::__construct();
 
-        // Yet another difficulty: just include base.php from Owncloud
-        // has all sorts of side effects; sets sessions cookies and so
-        // on. In the standard configuration we only have to disable
-        // the session cookies, otherwise it will destroy the
-        // browser's cookie storage. Still base.php _WILL_ change a
-        // lot of things. We also save and restore the session life-time
+        $this->ownCloudUri = $this->getConf('ownclouduri');
 
-        $savedSession = session_name();
-        $savedSessionId = session_id();
-        $savedUseCookies = ini_get('session.use_cookies');
-        $savedLifeTime = ini_get('gc_maxlifetime');
-        $savedCookieParams = session_get_cookie_params();
-        session_write_close();
-
-        ini_set('session.use_cookies', 0);
-        session_id($savedSessionId."DUMMY");
-        require_once($this->getConf('pathtoowncloud').'/lib/base.php');
-        restore_error_handler();
-        
-        if (!session_id()) {
-            session_start();
+        if (isset($_SESSION[DOKU_COOKIE]['authowncloud'])) {
+            $this->authCookies = $_SESSION[DOKU_COOKIE]['authowncloud']['cookies'];
+        } else {
+            $this->authCookies = array();
         }
-        $_SESSION = array();
-        if (ini_get("session.use_cookies")) {
-            $params = session_get_cookie_params();
-            setcookie(session_name(), '', time() - 42000, $params["path"],
-                      $params["domain"], $params["secure"], $params["httponly"]
-            );
-        }
-        session_destroy();
-
-        ini_set('session.use_cookies', $savedUseCookies);
-        ini_set('gc_maxlifeTime', $savedLifeTime);
-        session_set_cookie_params($savedCookieParams['lifetime'],
-                                  $savedCookieParams['path'],
-                                  $savedCookieParams['domain'],
-                                  $savedCookieParams['secure'],
-                                  $savedCookieParams['httponly']);
-        session_name($savedSession);
-        session_id($savedSessionId);
-        session_start();
-
-        error_reporting($savedReporting);
-
-		// Check if ownCloud is installed or in maintenance (update) mode
-		if (!OC_Config::getValue('installed', false)) {
-			global $conf;
-			echo "Owncloud not installed!";
-			$this->success = false;
-		}else{
-			$this->cando['addUser']   = true;
-			$this->cando['modGroups'] = true;
-			$this->cando['logout']    = true;
-			$this->cando['delUser']   = true;
-			$this->cando['modLogin']  = true;
-			$this->cando['modPass']   = true;
-			$this->cando['modName']   = true;
-			$this->cando['modMail']   = true;
-			$this->cando['getUsers']  = true;
-			$this->cando['getGroups'] = true;
-            $this->cando['getUserCount'] = true;
-            $this->success = true;
-		}
-
+                
+        $this->cando['addUser']   = true;
+        $this->cando['modGroups'] = true;
+        $this->cando['logout']    = true;
+        $this->cando['delUser']   = true;
+        $this->cando['modLogin']  = true;
+        $this->cando['modPass']   = true;
+        $this->cando['modName']   = true;
+        $this->cando['modMail']   = true;
+        $this->cando['getUsers']  = true;
+        $this->cando['getGroups'] = true;
+        $this->cando['getUserCount'] = true;
+        $this->success = true;
     }
 
+    protected function owncloudApiRequest($apiRequest, $method = 'GET', $params = array(), $user = null, $pass = null)
+    {
+        if (!$user || !$pass) {
+            if ($this->user && $this->password) {
+                $user = $this->user;
+                $pass = $this->password;
+            } else {
+                list($user, $pass) = self::getCredentialsFromCookie();
+                //error_log(__METHOD__.' credentials '.$one.' '.$two);
+            }
+        } else {
+            $this->user = $user;
+            $this->password = $pass;
+        }
+        
+        $params = http_build_query($params, '', '&');
+        $uri = $this->ownCloudUri.'/'.'ocs/v1.php/';
+        $uri .= $apiRequest;
+        $uri .= '?format=json';
+        if ($method == 'GET') {
+            $uri .= '&'.$params;
+        }
+        //error_log(__METHOD__.': '.$uri);
+
+        $cookies = array();
+        foreach($this->authCookies as $name => $value) {
+            $cookies[] = $name.'='.urlencode($value);
+        }
+        $cookies = implode('; ', $cookies);
+
+        $responseHeaders = array();
+        if (function_exists('curl_version')) {
+            $c = curl_init();
+            curl_setopt($c, CURLOPT_VERBOSE, 1);
+            curl_setopt($c, CURLOPT_URL, $uri);
+            if ($user && $pass) {
+                curl_setopt($c, CURLOPT_HTTPAUTH, CURLAUTH_ANY);
+                curl_setopt($c, CURLOPT_USERPWD, $user.':'.$pass);
+                //error_log(__METHOD__.': '.$user.':'.$pass);
+            }
+
+            if ($method != 'GET') {
+                curl_setopt($c, CURLOPT_POSTFIELDS, $params);
+            }
+            if ($method == 'PUT') {
+                curl_setopt($c, CURLOPT_CUSTOMREQUEST, 'PUT');
+            }
+            if ($method == 'DELETE') {
+                curl_setopt($c, CURLOPT_CUSTOMREQUEST, 'DELETE');
+            }
+            curl_setopt($c, CURLOPT_HTTPHEADER, array('OCS-ApiRequest: true'));
+            curl_setopt($c, CURLOPT_HEADERFUNCTION,
+                        function($curl, $headerline) use (&$responseHeaders) {
+                            $responseHeaders[] = trim($headerline);
+                            //error_log('header: '.$headerline);
+                            return strlen($headerline);
+                        });
+            if (!empty($cookies)) {
+                curl_setopt($c, CURLOPT_COOKIE, $cookies);
+                //error_log(__METHOD__.': '.$cookies);
+            }
+            curl_setopt($c, CURLOPT_RETURNTRANSFER, 1);
+            $responseBody = curl_exec($c);
+            //error_log(__METHOD__.': '.print_r($responseBody, true));
+            curl_close($c);
+        } else {
+            $headers = array();
+            if ($user && $Pass) {
+                $headers[] = 'Authorization: Basic '.base64_encode($user.':'.$pass);
+            }
+            if ($method != 'GET') {
+                $headers[] = 'Content-Type: application/x-www-form-urlencoded';
+                $headers[] = 'Content-Length: '.strlen($params);
+            }
+            $headers[] = 'X-OCS-ApiRequest: 1';
+            $headers[] = 'HTTP_OCS_APIREQUEST: true';
+            if (!empty($cookies)) {
+                $headers[] = 'Cookie: '.$cookie;
+            }
+            
+            $http = array(
+                'method' => $method,
+                'header' => implode("\r\n", $headers)
+                );
+            if ($method != 'GET') {
+                $http['content'] = $params;
+            }
+            $context = stream_context_create(array('http' => $http));
+            $fp = fopen($uri, 'rb', false, $context);
+            if ($fp === false) {
+                return false;
+            }
+            $responseBody = stream_get_contents($fp);
+            fclose($fp);
+            $responseHeaders = $http_response_header;
+        }
+        $result = json_decode($responseBody, true);
+        if (!is_array($result) ||
+            !isset($result['ocs']) ||
+            !isset($result['ocs']['data']) ||
+            !isset($result['ocs']['meta']) ||
+            !isset($result['ocs']['meta']['statuscode']) ||
+            $result['ocs']['meta']['statuscode'] != 100) {
+            //error_log(__METHOD__.' data '.print_r($result, true));
+            return false;
+        }
+        $data = $result['ocs']['data'];
+
+        //error_log(__METHOD__.' data '.print_r($data, true));
+        
+        /* parse the cookie headers and remember */
+        foreach ($responseHeaders as $header) {
+            $cookie = self::parseCookie($header);
+            if (!$cookie) {
+                continue;
+            }
+            if ($cookie['value'] == 'deleted') {
+                continue;
+            }
+            if ($cookie['name'] == 'oc_sessionPassphrase') {
+                $this->authCookies[$cookie['name']] = $cookie['value'];
+                continue;
+            }
+            if (preg_match('/^(KEY_)?oc[a-z0-9]+/', $cookie['name'])) {
+                $this->authCookies[$cookie['name']] = $cookie['value'];
+                continue;
+            }
+        }
+
+        $_SESSION[DOKU_COOKIE]['authowncloud']['cookies'] = $this->authCookies;
+        
+        return $data;
+    }
+
+    /**Obtain user and pass from the DokuWiki auth cookie, if set. */
+    static protected function getCredentialsFromCookie()
+    {
+        // Encrypted password
+        list($user, $sticky, $pass) = auth_getCookie();
+
+        // Decrypt password
+        $secret = auth_cookiesalt(!$sticky, true); //bind non-sticky to session
+        //error_log(__METHOD__.' pass '.$pass.' secret '.$secret);
+        $pass   = auth_decrypt($pass, $secret);
+        //error_log(__METHOD__.' pass '.$pass.' secret '.$secret);
+
+        return array($user, $pass);
+    }
+    
+    /**
+     * Parse a cookie header in order to obtain name, value, date of
+     * expiry and path.
+     *
+     * @parm cookieHeader Guess what
+     *
+     * @return Array with name, value, expires and path fields, or
+     * false if $cookie was not a Set-Cookie header.
+     *
+     */
+    static protected function parseCookie($cookieHeader)
+    {
+        if (preg_match('/^Set-Cookie:\s*'.
+                       '([^=]+)=([^;]+)(;|$)(\s*(expires)=([^;]+)(;|$))?(\s*(path)=([^;]+)(;|$))?/i',
+                       $cookieHeader, $match)) {
+            array_shift($match); // get rid of matched string
+            $name = array_shift($match);
+            $value = urldecode(array_shift($match));
+            $path = false;
+            $stamp = false;
+            while (count($match) > 0) {
+                $token = array_shift($match);
+                switch ($token) {
+                case 'expires':
+                    $stamp = array_shift($match);
+                    break;
+                case 'path':
+                    $path = array_shift($match);
+                }
+            }
+            return array('name' => $name,
+                         'value' => $value,
+                         'expires' => $stamp,
+                         'path' => $path);
+        }
+        return false;
+    }
+  
     /**
      * Check user+password
      *
@@ -99,11 +248,11 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin {
      * @return  bool
      */
     public function checkPass($user, $pass) {
-         if(OC_USER::checkPassword($user,$pass)) return true;
-         return false;
+        //error_log(__METHOD__);
+        $data = $this->ownCloudApiRequest('cloud/users/'.$user, 'GET', array(), $user, $pass);
+        return $data !== false; // if we succeed then this implies a successful login
     }
-    
-    
+
     /**
      * Return user info
      *
@@ -114,15 +263,21 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin {
      * @param   string $user the user name
      * @return  array containing user data or false
      */
-    public function getUserData($user) {
-		$name = OC_User::getDisplayName($user);
-		$mail = $this->getUserMail($user);
-		$grps = $this->getUserGroups($user);
-        return array('name'=>$name,'mail'=>$mail,'grps'=>$grps);
+    public function getUserData($user, $requireGroups = true) {
+        $data = $this->ownCloudApiRequest('cloud/users/'.$user);
+        if (!is_array($data)) {
+            return false;
+        }
+        $name = $data['displayname'];
+        $mail = $data['email'];
+        $result = array('name'=>$name, 'mail'=>$mail);
+        if ($requireGroups) {
+            $result['grps'] = $this->getUserGroups($user);
+        }
+        return $result;
     }
-    
-    
-     /**
+
+    /**
      * Create a new User
      *
      * Returns false if the user already exists, null when an error
@@ -140,21 +295,44 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin {
      * @return bool|null
      */
     public function createUser($user, $pwd, $name, $mail, $grps = null) {
-		global $conf;
-		if(OC_USER::userExists($user)) return false;
-		if(!OC_USER::createUser($user, $pwd)) return null;
-		if(!OC_USER::setDisplayName($user, $name)) return null;
-        if(!OC_Preferences::setValue($user, 'settings', 'email', $mail)) return null;
-        if(!OC_Group::groupExists($conf['defaultgroup'])) $this->addGroup($conf['defaultgroup']);
+        global $conf;
+        if ($this->getUserData($user, false) !== false) {
+            //error_log(__METHOD__.' user already present');
+            return false;
+        }
+        $params = array('userid' => $user, 'password' => $pwd);
+        $data = $this->ownCloudApiRequest('cloud/users', 'POST', $params);
+        if ($data === false) {
+            //error_log(__METHOD__.' cannot create user');
+            return false;
+        }
+        $params = array('key' => 'display', 'value' => $name);
+        $data = $this->ownCloudApiRequest('cloud/users/'.$user, 'PUT', $params);
+        if ($data === false) {
+            return false;
+        }
+        $params = array('key' => 'email', 'value' => $mail);
+        $data = $this->ownCloudApiRequest('cloud/users/'.$user, 'PUT', $params);
+        if ($data === false) {
+            return false;
+        }
         if(!is_array($grps)) $grps = array($conf['defaultgroup']);
         foreach($grps as $grp){
-			if(!OC_Group::groupExists($grp)) $this->addGroup($grp);
-			OC_Group::addToGroup($user, $grp);
-		}
-		return true;
+            $data = $this->retrieveGroups(0, -1, $grp);
+            if (empty($data) && !$this->addGroup($grp)) {
+                continue;
+            }
+            $params = array('groupid' => $grp);
+            $data = $this->ownCloudApiRequest('cloud/users/'.$user.'/groups', 'POST', $params);
+            if (!$data) {
+                continue;
+            }
+        }
+
+        return true;
     }
-    
-    
+
+
     /**
      * Modify user data
      *
@@ -163,105 +341,65 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin {
      * @return  bool
      */
     public function modifyUser($user, $changes) {
-        $return = true;
-        // password changing
-        if(isset($changes['pass'])) {
-			if(!OC_User::setPassword($user, $changes['pass'])) return false;
+        //error_log(__METHOD__.' '.$user.' '.print_r($changes, true));
+        foreach (array('mail' => 'email',
+                       'name' => 'display',
+                       'pass' => 'password') as $key => $ocKey) {
+            if (!isset($changes[$key])) {
+                continue;
+            }
+            $params = array('key' => $ocKey, 'value' => $changes[$key]);
+            $data = $this->ownCloudApiRequest('cloud/users/'.$user, 'PUT', $params);
+            if ($data === false) {
+                return false;
+            }
         }
-        // changing user data
-        $adchanges = array();
-        if(isset($changes['name'])) {
-            if(!OC_USER::setDisplayName($user, $changes['name'])) return false;
+
+        // groups need to be handled extra
+        if (isset($changes['grps'])) {
+            $oldGroups = $this->getUserGroups($user);
+            foreach ($changes['grps'] as $grp){
+                $data = $this->retrieveGroups(0, -1, $grp);
+                if (empty($data) && !$this->addGroup($grp)) {
+                    continue;
+                }
+                $params = array('groupid' => $grp);
+                $data = $this->ownCloudApiRequest('cloud/users/'.$user.'/groups', 'POST', $params);
+                if (!$data) {
+                    continue;
+                }
+            }
+            $deletedGroups = array_diff($oldGroups, $changes['grps']);
+            foreach ($deletedGroups as $grp) {
+                $params = array('groupid' => $grp);
+                $data = $this->ownCloudApiRequest('cloud/users/'.$user.'/groups', 'DELETE', $params);
+                if (!$data) {
+                    continue;
+                }
+            }
         }
-        if(isset($changes['grps'])) {
-			foreach($changes['grps'] as $grp){
-				if(!OC_Group::groupExists($grp)) $this->addGroup($grp);
-				OC_Group::addToGroup($user, $grp);
-			}
-        }
-        if(isset($changes['mail'])) {
-            if(!OC_Preferences::setValue($user, 'settings', 'email', $changes['mail'])) return false;
-        }
+
         return true;
     }
-    
-    
-        /**
+
+
+    /**
      * Remove one or more users from the owncloud database
      *
      * @param   array  $users   array of users to be deleted
      * @return  int             the number of users deleted
      */
     public function deleteUsers($users) {
-        if(!is_array($users) || empty($users)) return 0;
         $deleted = 0;
         foreach($users as $user) {
-            if(OC_User::deleteUser($user)) $deleted++;
+            $data = $this->ownCloudApiRequest('cloud/users/'.$user, 'DELETE');
+            if ($data !== false) {
+                ++$deleted;
+            }
         }
         return $deleted;
     }
-    
-    
-    /**
-     * Return db-query for filter
-     *
-     *
-     * @param array $filter
-     * @return int
-     */
-    private function getUsers($filter = array(), $start = 0, $limit = -1, $count = false) {
-		$wheres = '';
-		$joins = '';
-		$selectMail = '';
-		$selectGroup = '';
-		if(!empty($filter)){
-			foreach($filter as $item => $pattern) {
-				$where = array();
-				$values = array();
-				$groupJoin = false;
-				$prefJoin = false;
-				$tmp = "%$pattern%";
-				if($item == 'user') {
-					array_push($where, '*PREFIX*users.uid LIKE ?');
-					array_push($values, $tmp);
-				}else if($item == 'name') {
-					array_push($where, '*PREFIX*users.displayname LIKE ?');
-					array_push($values, $tmp);
-				}else if($item == 'mail') {
-					array_push($where, '*PREFIX*preferences.configvalue LIKE ?');
-					array_push($values, $tmp);
-					$prefJoin = true;
-				}else if($item == 'grps') {
-					array_push($where, '*PREFIX*group_user.gid LIKE ?');
-					array_push($values, $tmp);
-					$groupJoin = true;
-				}
-			}
-			if($prefJoin){
-					array_push($where, '*PREFIX*preferences.configkey = ?');
-					array_push($values, 'email');
-					$joins .= ' JOIN *PREFIX*preferences ON *PREFIX*users.uid = *PREFIX*preferences.userid';
-					$selectMail = ', *PREFIX*preferences.configvalue AS mail ';
-			}
-			if($groupJoin){
-				$joins .= ' JOIN *PREFIX*group_user ON *PREFIX*users.uid = *PREFIX*group_user.uid';
-				$selectGroup = ', *PREFIX*group_user.gid AS `group` ';
-			}
-			if(!empty($where)) $wheres = ' WHERE '.implode(' AND ', $where);
-		}
-                if ($count) {
-                    $sql = "SELECT COUNT(DISTINCT *PREFIX*users.uid) as 'count' FROM `*PREFIX*users`";
-                } else {
-                    $sql = "SELECT DISTINCT *PREFIX*users.uid AS user, *PREFIX*users.displayname AS name $selectMail $selectGroup FROM `*PREFIX*users`";
-                }
-		$sql .= $joins.' '.$wheres;
-		if($limit > 0) $sql .= ' LIMIT '.$start.','.$limit.' ';
-		$db = OC_DB::prepare($sql);
-		$result = $db->execute($values);
-		return $result;
-    }
-    
-    
+
     /**
      * Return a count of the number of user which meet $filter criteria
      *
@@ -271,10 +409,14 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin {
      * @return int
      */
     public function getUserCount($filter = array()){
-        $row = $this->getUsers($filter, 0, -1, true)->fetchRow();
-        return $row['count'];
-    }	
-	
+        $data = $this->ownCloudApiRequest('cloud/users');
+        if (!isset($data['users'])) {
+            return false;
+        }
+        $users = $data['users'];
+        return count($users);
+    }
+
     /**
      * Bulk retrieval of user data
      *
@@ -285,75 +427,95 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin {
      * @return  array userinfo (refer getUserData for internal userinfo details)
      */
     public function retrieveUsers($start = 0, $limit = -1, $filter = array()) {
-		$result = $this->getUsers($filter, $start, $limit);
-		$ret = array();
-		$row = $result->fetchRow();
-		while($row){
-			$ret[$row['user']]['name'] =$row['name'];
-			$ret[$row['user']]['mail'] =$this->getUserMail($row['user']);
-			$ret[$row['user']]['grps'] =$this->getUserGroups($row['user']);
-			$row = $result->fetchRow();
-		}
-		return $ret;
-	}
-	
-	
+        $params = array('offset' => $start);
+        if ($limit >= 0) {
+            $params['limit'] = $limit;
+        }
+        if (isset($filter['user'])) {
+            $params['search'] = $filter['user'];
+        }
+        $data = $this->ownCloudApiRequest('cloud/users', 'GET', $params);
+        if (!isset($data['users'])) {
+            return false;
+        }
+        $users = $data['users'];
+        $ret = array();
+        foreach ($users as $user) {
+            $data = $this->getUserData($user);
+            $inc = true;
+            foreach ($filter as $key => $pattern) {
+                if (strstr($data[$key], $pattern) === false) {
+                    $inc = false;
+                    break;
+                }
+            }
+            if ($inc) { // else discard
+                $ret[$user] = $data;
+            }
+        }
+        //error_log(__METHOD__.' '.print_r($ret, true));
+        return $ret;
+    }
+        
     /**
-     * Define a group 
+     * Define a group
      *
      * @param   string $group
      * @return  bool success
      */
     public function addGroup($group) {
-        return OC_Group::createGroup($group);
+        $params = array('groupid' => $group);
+        $data = $this->ownCloudApiRequest('cloud/groups', 'POST', $params);
+        return $data !== false;
     }
 
-    
+
     /**
      * LogOff user
      */
-    public function logOff(){
-		if (!$this->getConf('disableoclogout')) {
-            // Logout actually works, but can lead to recursion if we
-            // are embedded into an OwnCloud instance.
-            $savedSession = session_name();
-            session_write_close();
-            session_name(OC_Util::getInstanceId());
-            session_start();
-            OC_User::logout();
-            session_write_close();
-            session_name($savedSession);
-            session_start();
-        }
-	}
-	
-	
-	/* List all available groups 
-	 * 
+    public function logOff() {
+        // we simply unset auth cookies
+        unset($_SESSION[DOKU_COOKIE]['authowncloud']);
+        $this->authCookies = array();
+    }
+
+    /* List all available groups
+     *
      * @return array|bool false or array with all groups.
-	 */
-	public function retrieveGroups($start=0,$limit=-1){
-			return OC_Group::getGroups('',$limit,$start);
-	}
-	
-	
-	/* List all available groups for a user
-	 * 
-	 * @param string $user loginname
+     */
+    public function retrieveGroups($start = 0, $limit = -1, $search = false) {
+        $params = array('offset' => $start);
+        if ($limit >= 0) {
+            $params['limit'] = $limit;
+        }
+        if ($search) {
+            $params['search'] = $search;
+        }
+        $data = $this->ownCloudApiRequest('cloud/groups', 'GET', $params);
+        if (!isset($data['groups'])) {
+            return false;
+        }
+        //error_log(__METHOD__.' '.print_r($data['groups'], true));
+        return $data['groups'];
+    }
+
+    /* List all available groups for a user (not part of the auth interface)
+     *
+     * @param string $user loginname
      * @return array|bool false or array with all groups of this user.
-	 */
-	private function getUserGroups($user){
-		return OC_Group::getUserGroups($user);
-	}
-	
-	/* Get email for a a user
-	 * 
-	 * @param string $user loginname
-     * @return string|bool false or usermail
-	 */
-	private function getUserMail($user){
-		$db = OC_DB::prepare('SELECT `configvalue` FROM `*PREFIX*preferences` WHERE `userid` = ? AND `configkey` = "email"');
-		$result = $db->execute(array($user));
-		return $result->fetchOne();
-	}
+     */
+    private function getUserGroups($user){
+        $data = $this->ownCloudApiRequest('cloud/users/'.$user.'/groups');
+        if (!isset($data['groups'])) {
+            return false;
+        }
+        //error_log(__METHOD__.' '.print_r($data['groups'], true));
+        return $data['groups'];
+    }
 }
+
+/*
+ * Local Variables: ***
+ * c-basic-offset: 4 ***
+ * End: ***
+ */

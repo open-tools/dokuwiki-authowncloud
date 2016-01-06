@@ -1,3 +1,3 @@
 <?php
-$meta['pathtoowncloud']      = array('string');
+$meta['ownclouduri']         = array('string');
 $meta['disableoclogout']     = array('onoff');
