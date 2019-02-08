@@ -85,7 +85,7 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin
             curl_setopt($c, CURLOPT_VERBOSE, 1);
             curl_setopt($c, CURLOPT_URL, $uri);
             if ($user && $pass) {
-                curl_setopt($c, CURLOPT_HTTPAUTH, CURLAUTH_ANY);
+                curl_setopt($c, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
                 curl_setopt($c, CURLOPT_USERPWD, $user.':'.$pass);
                 //error_log(__METHOD__.': '.$user.':'.$pass);
             }
@@ -116,7 +116,7 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin
             curl_close($c);
         } else {
             $headers = array();
-            if ($user && $Pass) {
+            if ($user && $pass) {
                 $headers[] = 'Authorization: Basic '.base64_encode($user.':'.$pass);
             }
             if ($method != 'GET') {
@@ -124,6 +124,7 @@ class auth_plugin_authowncloud extends DokuWiki_Auth_Plugin
                 $headers[] = 'Content-Length: '.strlen($params);
             }
             $headers[] = 'X-OCS-ApiRequest: 1';
+            $headers[] = 'OCS-ApiRequest: 1';
             $headers[] = 'HTTP_OCS_APIREQUEST: true';
             if (!empty($cookies)) {
                 $headers[] = 'Cookie: '.$cookie;
